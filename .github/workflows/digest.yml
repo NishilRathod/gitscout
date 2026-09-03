@@ -1,0 +1,39 @@
+name: weekly digest
+
+# The schedule is what makes the momentum figures real: each run appends a
+# snapshot, so measured rates appear after the second week and acceleration
+# after the third, with nobody having to remember to run anything.
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+
+      - name: Test
+        run: go test ./...
+
+      - name: Run gitscout
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: go run ./cmd/gitscout run
+
+      - name: Commit the digest and snapshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/snapshots digests
+          # Nothing to commit is a normal outcome, not a failure.
+          git diff --staged --quiet || git commit -m "digest: $(date -u +%Y-%m-%d)"
+          git push
