@@ -88,13 +88,9 @@ func scout(ctx context.Context, o options) error {
 			"unauthenticated requests are capped at 60/hour, far below what a run needs")
 	}
 
-	login := o.user
-	if login == "" {
-		u, err := client.Viewer(ctx)
-		if err != nil {
-			return fmt.Errorf("identifying the token's owner (pass -user to skip this): %w", err)
-		}
-		login = u.Login
+	login, err := resolveLogin(ctx, o.user, client.Viewer, os.Getenv)
+	if err != nil {
+		return err
 	}
 
 	var runErrs []string
@@ -218,6 +214,37 @@ func scout(ctx context.Context, o options) error {
 	}
 	fmt.Fprintf(os.Stderr, "\ndigest written to %s\n", path)
 	return nil
+}
+
+// resolveLogin works out whose profile to personalise against.
+//
+// The environment fallback is not a convenience. Inside GitHub Actions the
+// supplied GITHUB_TOKEN is a GitHub App installation token with no user
+// identity attached, so /user answers 403 "Resource not accessible by
+// integration" — which meant the tool failed outright in the one environment it
+// is meant to run in unattended. Actions does set GITHUB_REPOSITORY_OWNER, and
+// for a scheduled run on your own repository that is exactly the right account.
+//
+// The order tries the most accurate source first and falls back only when it
+// has to, so a local run still personalises against whoever owns the token
+// rather than whatever the environment happens to say.
+func resolveLogin(
+	ctx context.Context,
+	flagUser string,
+	viewer func(context.Context) (github.User, error),
+	getenv func(string) string,
+) (string, error) {
+	if flagUser != "" {
+		return flagUser, nil
+	}
+	if u, err := viewer(ctx); err == nil && u.Login != "" {
+		return u.Login, nil
+	}
+	if owner := strings.TrimSpace(getenv("GITHUB_REPOSITORY_OWNER")); owner != "" {
+		return owner, nil
+	}
+	return "", fmt.Errorf("could not identify whose profile to use: " +
+		"the token has no user identity and GITHUB_REPOSITORY_OWNER is unset. Pass -user")
 }
 
 func writeDigest(dir string, r render.Report) (string, error) {
