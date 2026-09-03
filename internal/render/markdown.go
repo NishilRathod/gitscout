@@ -75,14 +75,23 @@ func writeCandidateTable(b *strings.Builder, cands []score.Candidate, fitLabel s
 		if !c.Momentum.Measured {
 			measured = "*"
 		}
-		fmt.Fprintf(b, "| [%s](%s) | %s | %s | %.2f | %.2f%s | %.2f | %s |\n",
-			repo.FullName, repo.HTMLURL,
+
+		// The project's own one-line description, under its link. Without it
+		// a row is a name and six numbers, and the reader still has to open
+		// the repository to find out what it does.
+		name := fmt.Sprintf("[%s](%s)", repo.FullName, repo.HTMLURL)
+		if d := shortDescription(repo.Description); d != "" {
+			name += fmt.Sprintf("<br><sub>%s</sub>", escapePipes(d))
+		}
+
+		fmt.Fprintf(b, "| %s | %s | %s | %.2f | %.2f%s | %.2f | %s |\n",
+			name,
 			languageOr(repo.Language, "—"),
 			humanCount(repo.Stars),
 			c.Contributability.Total,
 			c.Momentum.Total, measured,
 			fit(c),
-			reason(c, 3),
+			escapePipes(reason(c, 3)),
 		)
 	}
 	b.WriteString("\nColumns: **Open** how readily outside work gets merged, **Merge** growth (`*` marks a lifetime average rather than a measured rate).\n\n")
@@ -133,6 +142,9 @@ func writeSignals(b *strings.Builder, heading string, sigs []gaps.Signal, blurb 
 			title = fmt.Sprintf("[%s](%s)", s.Title, s.URL)
 		}
 		fmt.Fprintf(b, "- **%s** — %s\n", title, strings.Join(s.Evidence, "; "))
+		if d := shortDescription(s.Description); d != "" {
+			fmt.Fprintf(b, "  <br><sub>%s</sub>\n", d)
+		}
 	}
 	b.WriteString("\n")
 }

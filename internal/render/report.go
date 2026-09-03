@@ -98,6 +98,37 @@ func caveats(c score.Candidate) []string {
 	return out
 }
 
+// maxDescription is how much of a repository's own description to show. Long
+// enough to say what a project is, short enough not to crowd out the scores.
+const maxDescription = 110
+
+// shortDescription cleans a repository's description for display in one line.
+//
+// Descriptions are author-written and routinely contain pipes, newlines and
+// runs of whitespace; a raw pipe would split a Markdown table cell and silently
+// corrupt the row, so it is escaped rather than trusted.
+func shortDescription(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if s == "" {
+		return ""
+	}
+	if len(s) > maxDescription {
+		// Trim at a word boundary where there is one nearby, so the text
+		// does not break mid-word.
+		cut := s[:maxDescription]
+		if i := strings.LastIndex(cut, " "); i > maxDescription-25 {
+			cut = cut[:i]
+		}
+		s = cut + "…"
+	}
+	return s
+}
+
+// escapePipes protects Markdown table cells from descriptions containing "|".
+func escapePipes(s string) string {
+	return strings.ReplaceAll(s, "|", "\\|")
+}
+
 func humanCount(n int) string {
 	switch {
 	case n >= 1000000:

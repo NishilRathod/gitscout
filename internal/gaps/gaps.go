@@ -44,8 +44,13 @@ const (
 
 // Signal is one opportunity, with the evidence that produced it.
 type Signal struct {
-	Kind     Kind
-	Title    string
+	Kind  Kind
+	Title string
+
+	// Description is the project's own summary of itself, where the signal
+	// refers to a repository. Stack and topic signals have none.
+	Description string
+
 	Evidence []string
 	URL      string
 	Score    float64
@@ -81,11 +86,12 @@ func Abandoned(cands []score.Candidate, now time.Time, limit int) []Signal {
 		// Weight by how many people cared and how long it has been left.
 		// Both are capped so one enormous relic cannot crowd out the list.
 		out = append(out, Signal{
-			Kind:     KindAbandoned,
-			Title:    r.FullName,
-			Evidence: ev,
-			URL:      r.HTMLURL,
-			Score:    0.7*norm(float64(r.Stars), 50000) + 0.3*norm(stale, 1095),
+			Kind:        KindAbandoned,
+			Title:       r.FullName,
+			Description: r.Description,
+			Evidence:    ev,
+			URL:         r.HTMLURL,
+			Score:       0.7*norm(float64(r.Stars), 50000) + 0.3*norm(stale, 1095),
 		})
 	}
 	return trim(out, limit)

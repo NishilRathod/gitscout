@@ -26,7 +26,8 @@ func prof() profile.Profile {
 func repo() github.Repo {
 	r := github.Repo{
 		ID: 1, FullName: "acme/toolkit", HTMLURL: "https://github.com/acme/toolkit",
-		Language: "Go", Stars: 4200, Topics: []string{"cli"},
+		Description: "A well-run toolkit",
+		Language:    "Go", Stars: 4200, Topics: []string{"cli"},
 		CreatedAt: now.AddDate(0, 0, -300), PushedAt: now.AddDate(0, 0, -2),
 		Contributors: 140, MergedPRs30d: 18, MergedPRs90d: 52, PRAuthors90d: 21,
 		HasContributing: true, Enriched: true,
@@ -256,5 +257,106 @@ func TestHumanCountAndLanguageFallback(t *testing.T) {
 	}
 	if got := languageOr("", "—"); got != "—" {
 		t.Errorf("languageOr = %q", got)
+	}
+}
+
+// A row that is a name and six numbers still makes the reader open the
+// repository to find out what it does.
+func TestMarkdownShowsDescriptionUnderTheLink(t *testing.T) {
+	r := reportWith(store.History{}, 0)
+	md := Markdown(r)
+
+	if !strings.Contains(md, "[acme/toolkit](https://github.com/acme/toolkit)<br><sub>A well-run toolkit</sub>") {
+		t.Errorf("description should sit under the link in the same cell:\n%s", md)
+	}
+}
+
+// A pipe in an author-written description would split the table cell and
+// silently corrupt the row.
+func TestMarkdownEscapesPipesInDescriptions(t *testing.T) {
+	rp := repo()
+	rp.Description = "Parses a|b|c streams"
+	cands := score.Evaluate([]github.Repo{rp}, prof(), store.History{}, now)
+
+	r := reportWith(store.History{}, 0)
+	r.Contribute = score.TopContribute(cands, 10)
+	md := Markdown(r)
+
+	if strings.Contains(md, "Parses a|b|c") {
+		t.Error("raw pipes would break the table row")
+	}
+	if !strings.Contains(md, `Parses a\|b\|c streams`) {
+		t.Errorf("expected escaped pipes:\n%s", md)
+	}
+	// The row must still have the right number of cells.
+	for _, line := range strings.Split(md, "\n") {
+		if strings.HasPrefix(line, "| [acme/toolkit") {
+			if got := strings.Count(line, "|") - strings.Count(line, `\|`); got != 8 {
+				t.Errorf("row has %d unescaped pipes, want 8: %s", got, line)
+			}
+		}
+	}
+}
+
+func TestMarkdownGapSignalCarriesDescription(t *testing.T) {
+	r := reportWith(store.History{}, 0)
+	r.Abandoned = []gaps.Signal{{
+		Kind:        gaps.KindAbandoned,
+		Title:       "nvbn/thefuck",
+		URL:         "https://github.com/nvbn/thefuck",
+		Description: "Magnificent app which corrects your previous console command.",
+		Evidence:    []string{"97.8k stars, 3961 forks"},
+	}}
+	md := Markdown(r)
+
+	if !strings.Contains(md, "<sub>Magnificent app which corrects your previous console command.</sub>") {
+		t.Errorf("gap signals should say what the project is:\n%s", md)
+	}
+}
+
+func TestTableShowsGapSignalDescription(t *testing.T) {
+	r := reportWith(store.History{}, 0)
+	r.Abandoned = []gaps.Signal{{
+		Title:       "nvbn/thefuck",
+		Description: "Magnificent app which corrects your previous console command.",
+		Evidence:    []string{"97.8k stars"},
+	}}
+	var buf bytes.Buffer
+	if err := Table(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "Magnificent app which corrects") {
+		t.Errorf("terminal output missing the description:\n%s", buf.String())
+	}
+}
+
+func TestShortDescription(t *testing.T) {
+	long := "This project does a great many things and the author has explained every single one of them at considerable length indeed"
+
+	tests := []struct {
+		name, in, want string
+	}{
+		{"empty stays empty", "", ""},
+		{"short passes through", "A small tool", "A small tool"},
+		{"newlines and runs of spaces collapse", "A  tool\nfor\tthings", "A tool for things"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shortDescription(tt.in); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+
+	got := shortDescription(long)
+	if len(got) > maxDescription+3 {
+		t.Errorf("length %d exceeds the cap, got %q", len(got), got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("truncated text should be marked: %q", got)
+	}
+	// Truncation lands on a word boundary rather than mid-word.
+	if strings.Contains(got, "considerabl…") {
+		t.Errorf("broke mid-word: %q", got)
 	}
 }

@@ -80,6 +80,11 @@ func signalList(w io.Writer, heading string, sigs []gaps.Signal) {
 	}
 	for _, s := range sigs {
 		fmt.Fprintf(w, "  %s\n", s.Title)
+		// This list is indented text rather than a tabwriter block, so an
+		// extra line here costs no column alignment.
+		if d := shortDescription(s.Description); d != "" {
+			fmt.Fprintf(w, "      %s\n", d)
+		}
 		for _, e := range s.Evidence {
 			fmt.Fprintf(w, "      %s\n", e)
 		}
