@@ -63,7 +63,9 @@ func (c *Client) enrichOne(ctx context.Context, r *Repo) error {
 	note(err)
 	r.MergedPRs30d = stats.Merged30d
 	r.MergedPRs90d = stats.Merged90d
-	r.PRAuthors90d = stats.DistinctAuthors90d
+	r.HumanPRs90d = stats.HumanMerged90d
+	r.ForkPRs90d = stats.ForkMerged90d
+	r.ForkAuthors90d = stats.ForkAuthors90d
 
 	has, err := c.HasContributingGuide(ctx, r.FullName)
 	note(err)
@@ -96,33 +98,58 @@ func (c *Client) ContributorCount(ctx context.Context, fullName string) (int, er
 	return len(items), nil
 }
 
-// PRStats summarises recent pull-request throughput.
+// PRStats summarises recent pull-request throughput and how much of it came
+// from outside the project.
 type PRStats struct {
-	Merged30d          int
-	Merged90d          int
-	DistinctAuthors90d int
+	Merged30d int
+	Merged90d int
+
+	// The rest cover the 90-day window and exclude bots.
+	HumanMerged90d int
+	ForkMerged90d  int // opened from a fork rather than a branch of the repo
+	ForkAuthors90d int // distinct people behind ForkMerged90d
 }
 
-// MergedPRStats counts recently merged pull requests and how many distinct
-// people authored them, from a single page of recently updated closed PRs.
+// MergedPRStats counts recently merged pull requests, and how many of them came
+// from forks and from how many people, from a single page of recently updated
+// closed PRs.
 //
-// Distinct authors is the honest proxy for "does this project accept outside
-// work". Establishing who is core and who is an outsider would need the
-// collaborators endpoint, which requires push access the tool does not have; a
-// project merging PRs from many different people is accepting outside work
-// whoever those people are, and one merging fifty PRs from one maintainer is
-// not.
+// A pull request from a fork is the honest proxy for outside work. Pushing a
+// branch to the repository itself needs write access, which an outsider does
+// not have, so in-repo branches are the maintainers' own work however many
+// maintainers there are. Counting every distinct author instead rated projects
+// that merge almost nothing from outside as welcoming: stablyai/orca had five
+// people's PRs merged in 90 days, but measured on 2026-10-07 only 2 of its last
+// 80 merged PRs came from forks, from one person. Establishing who is core
+// directly would need the collaborators endpoint, which requires push access
+// the tool does not have; the head repository is already in this response.
+//
+// The comparison is GraphQL's isCrossRepository, made over REST so it costs no
+// extra request: the head repository differs from the base. A null head
+// repository means the fork was deleted after the PR was opened, and still
+// counts as a fork. Maintainers who work from personal forks are counted as
+// outside authors; that errs towards calling a project open, the opposite of
+// the mistake this replaces.
 //
 // The single-page cap means a very busy repository can undercount. That biases
 // the score down for exactly the repos that need no help finding contributors,
 // so it is a safe direction to be wrong in.
 func (c *Client) MergedPRStats(ctx context.Context, fullName string, now time.Time) (PRStats, error) {
+	type repoRef struct {
+		ID int64 `json:"id"`
+	}
 	var prs []struct {
 		MergedAt *time.Time `json:"merged_at"`
 		User     struct {
 			Login string `json:"login"`
 			Type  string `json:"type"`
 		} `json:"user"`
+		Head struct {
+			Repo *repoRef `json:"repo"`
+		} `json:"head"`
+		Base struct {
+			Repo *repoRef `json:"repo"`
+		} `json:"base"`
 	}
 
 	q := url.Values{}
@@ -136,7 +163,7 @@ func (c *Client) MergedPRStats(ctx context.Context, fullName string, now time.Ti
 	}
 
 	var st PRStats
-	authors := map[string]bool{}
+	forkAuthors := map[string]bool{}
 	cut30 := now.AddDate(0, 0, -30)
 	cut90 := now.AddDate(0, 0, -90)
 
@@ -144,20 +171,30 @@ func (c *Client) MergedPRStats(ctx context.Context, fullName string, now time.Ti
 		if pr.MergedAt == nil {
 			continue
 		}
-		if pr.MergedAt.After(cut90) {
-			st.Merged90d++
-			// Bots are excluded: a repo whose merged PRs are mostly
-			// dependency bumps from a bot is not thereby welcoming to
-			// human contributors, and counting them would say it is.
-			if pr.User.Login != "" && !isBot(pr.User.Login, pr.User.Type) {
-				authors[pr.User.Login] = true
-			}
-		}
 		if pr.MergedAt.After(cut30) {
 			st.Merged30d++
 		}
+		if !pr.MergedAt.After(cut90) {
+			continue
+		}
+		st.Merged90d++
+
+		// Bots are excluded: a repo whose merged PRs are mostly dependency
+		// bumps from a bot is not thereby welcoming to human contributors,
+		// and counting them either way would skew the fork share.
+		if pr.User.Login == "" || isBot(pr.User.Login, pr.User.Type) {
+			continue
+		}
+		st.HumanMerged90d++
+
+		fromFork := pr.Head.Repo == nil ||
+			(pr.Base.Repo != nil && pr.Head.Repo.ID != pr.Base.Repo.ID)
+		if fromFork {
+			st.ForkMerged90d++
+			forkAuthors[pr.User.Login] = true
+		}
 	}
-	st.DistinctAuthors90d = len(authors)
+	st.ForkAuthors90d = len(forkAuthors)
 	return st, nil
 }
 

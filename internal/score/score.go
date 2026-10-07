@@ -17,6 +17,11 @@ type Component struct {
 	Name   string
 	Value  float64 // the score contribution, already weighted
 	Detail string  // the underlying measurement, for display
+
+	// Headline marks the measurement a one-line summary must show whatever
+	// it contributed. Evidence that scored nothing is often the evidence a
+	// reader most needs to see.
+	Headline bool
 }
 
 // Score is a value in [0, 1] plus the reasoning behind it.
@@ -38,6 +43,12 @@ func (s *Score) add(name string, value float64, detail string) {
 		return
 	}
 	s.Components = append(s.Components, Component{Name: name, Value: value, Detail: detail})
+	s.Total += value
+}
+
+// headline adds a component that summaries always show; see Component.
+func (s *Score) headline(name string, value float64, detail string) {
+	s.Components = append(s.Components, Component{Name: name, Value: value, Detail: detail, Headline: true})
 	s.Total += value
 }
 

@@ -58,34 +58,38 @@ func (r Report) HistoryNote() string {
 	}
 }
 
-// reason summarises why a candidate ranked where it did, strongest components
-// first.
+// reason summarises why a candidate ranked where it did: headline evidence
+// first whatever it scored, then the strongest remaining components.
 func reason(c score.Candidate, max int) string {
 	type part struct {
 		v float64
 		s string
 	}
+	var lead []string
 	var parts []part
 
 	collect := func(s score.Score) {
 		for _, comp := range s.Components {
-			if comp.Detail == "" || comp.Value <= 0 {
-				continue
+			switch {
+			case comp.Detail == "":
+			case comp.Headline:
+				lead = append(lead, comp.Detail)
+			case comp.Value > 0:
+				parts = append(parts, part{comp.Value, comp.Detail})
 			}
-			parts = append(parts, part{comp.Value, comp.Detail})
 		}
 	}
 	collect(c.Contributability)
 	collect(c.Momentum)
 
 	sort.SliceStable(parts, func(i, j int) bool { return parts[i].v > parts[j].v })
-	if len(parts) > max {
-		parts = parts[:max]
-	}
 
-	out := make([]string, len(parts))
-	for i, p := range parts {
-		out[i] = p.s
+	out := lead
+	for _, p := range parts {
+		out = append(out, p.s)
+	}
+	if len(out) > max {
+		out = out[:max]
 	}
 	return strings.Join(out, "; ")
 }

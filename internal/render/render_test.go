@@ -29,7 +29,8 @@ func repo() github.Repo {
 		Description: "A well-run toolkit",
 		Language:    "Go", Stars: 4200, Topics: []string{"cli"},
 		CreatedAt: now.AddDate(0, 0, -300), PushedAt: now.AddDate(0, 0, -2),
-		Contributors: 140, MergedPRs30d: 18, MergedPRs90d: 52, PRAuthors90d: 21,
+		Contributors: 140, MergedPRs30d: 18, MergedPRs90d: 52,
+		HumanPRs90d: 48, ForkPRs90d: 36, ForkAuthors90d: 21,
 		HasContributing: true, Enriched: true,
 		Slices: []string{github.SliceGoodFirst},
 	}
@@ -119,7 +120,7 @@ func TestMarkdownStructureAndContent(t *testing.T) {
 		// The repository, linked.
 		"[acme/toolkit](https://github.com/acme/toolkit)",
 		// Its measured evidence, not just a score.
-		"21 people had PRs merged in 90d",
+		"36/48 human PRs merged from forks, 21 outside authors",
 		// The profile it was personalised against.
 		"typescript 1.00",
 		// Rate-limit accounting.
@@ -246,8 +247,25 @@ func TestReasonPrefersStrongestComponents(t *testing.T) {
 		t.Errorf("reason = %q, want exactly 2 parts", got)
 	}
 	// The single strongest piece of evidence this tool has.
-	if !strings.Contains(got, "21 people had PRs merged") {
-		t.Errorf("reason = %q, want author diversity leading", got)
+	if !strings.HasPrefix(got, "36/48 human PRs merged from forks, 21 outside authors") {
+		t.Errorf("reason = %q, want outside authors leading", got)
+	}
+}
+
+// A repository that merges only its own branches scores nothing for outside
+// authors, so ranking by weight alone would hide the one fact that explains its
+// low score behind its good-first-issue labels and throughput.
+func TestReasonLeadsWithForkEvidenceEvenWhenItScoredNothing(t *testing.T) {
+	closed := repo()
+	closed.ForkPRs90d, closed.ForkAuthors90d = 0, 0
+	cands := score.Evaluate([]github.Repo{closed}, prof(), store.History{}, now)
+
+	got := reason(cands[0], 2)
+	if !strings.HasPrefix(got, "0/48 human PRs merged from forks, 0 outside authors; ") {
+		t.Errorf("reason = %q, want the fork evidence first", got)
+	}
+	if strings.Count(got, ";") != 1 {
+		t.Errorf("reason = %q, want the headline plus one more part", got)
 	}
 }
 

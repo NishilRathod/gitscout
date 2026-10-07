@@ -19,24 +19,27 @@ func lic(r github.Repo, spdx string) github.Repo {
 
 // clawCode reproduces ultraworkers/claw-code as measured against the live API
 // on 2026-09-03: enormous stars and forks, almost no contributors, no topics.
-// The tool exists to *not* recommend this.
+// The tool exists to *not* recommend this. Its one merged PR in the window
+// (2026-08-06) came from a fork.
 func clawCode() github.Repo {
 	return github.Repo{
-		ID:           1197021090,
-		FullName:     "ultraworkers/claw-code",
-		Language:     "Rust",
-		Stars:        195165,
-		Forks:        108752,
-		OpenIssues:   41,
-		Topics:       nil,
-		CreatedAt:    now.AddDate(0, 0, -156),
-		PushedAt:     now.AddDate(0, 0, -18),
-		Contributors: 23,
-		MergedPRs30d: 1,
-		MergedPRs90d: 1,
-		PRAuthors90d: 1,
-		Enriched:     true,
-		Slices:       []string{"rising:rust"},
+		ID:             1197021090,
+		FullName:       "ultraworkers/claw-code",
+		Language:       "Rust",
+		Stars:          195165,
+		Forks:          108752,
+		OpenIssues:     41,
+		Topics:         nil,
+		CreatedAt:      now.AddDate(0, 0, -156),
+		PushedAt:       now.AddDate(0, 0, -18),
+		Contributors:   23,
+		MergedPRs30d:   1,
+		MergedPRs90d:   1,
+		HumanPRs90d:    1,
+		ForkPRs90d:     1,
+		ForkAuthors90d: 1,
+		Enriched:       true,
+		Slices:         []string{"rising:rust"},
 	}
 }
 
@@ -73,10 +76,65 @@ func healthy() github.Repo {
 		Contributors:    140,
 		MergedPRs30d:    18,
 		MergedPRs90d:    52,
-		PRAuthors90d:    21,
+		HumanPRs90d:     48,
+		ForkPRs90d:      36,
+		ForkAuthors90d:  21,
 		HasContributing: true,
 		Enriched:        true,
 		Slices:          []string{github.SliceGoodFirst, "rising:go"},
+	}
+	return lic(r, "Apache-2.0")
+}
+
+// measuredOn is when orca and headroom were recorded from the live API.
+var measuredOn = time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC)
+
+// orca reproduces stablyai/orca as measured on 2026-10-07. It advertised good
+// first issues and help wanted, merged 75 PRs in 90 days from five people, and
+// scored 0.93 for openness when distinct authors drove the score. Only 5 of
+// those 75 came from forks, all from one outsider.
+func orca() github.Repo {
+	r := github.Repo{
+		ID:              1183888342,
+		FullName:        "stablyai/orca",
+		Language:        "TypeScript",
+		Stars:           86710,
+		Forks:           5569,
+		CreatedAt:       time.Date(2026, 3, 17, 0, 0, 0, 0, time.UTC),
+		PushedAt:        measuredOn,
+		Contributors:    425,
+		MergedPRs30d:    75,
+		MergedPRs90d:    75,
+		HumanPRs90d:     75,
+		ForkPRs90d:      5,
+		ForkAuthors90d:  1,
+		HasContributing: true,
+		Enriched:        true,
+		Slices:          []string{github.SliceGoodFirst, github.SliceHelpWanted},
+	}
+	return lic(r, "MIT")
+}
+
+// headroom reproduces headroomlabs-ai/headroom as measured on 2026-10-07: 72 of
+// 87 human PRs merged in 90 days came from forks, from 36 different people. It
+// advertised neither good first issues nor help wanted, and scored 0.75.
+func headroom() github.Repo {
+	r := github.Repo{
+		ID:              1129940957,
+		FullName:        "headroomlabs-ai/headroom",
+		Language:        "Python",
+		Stars:           74541,
+		Forks:           5769,
+		CreatedAt:       time.Date(2026, 1, 7, 0, 0, 0, 0, time.UTC),
+		PushedAt:        measuredOn,
+		Contributors:    319,
+		MergedPRs30d:    94,
+		MergedPRs90d:    94,
+		HumanPRs90d:     87,
+		ForkPRs90d:      72,
+		ForkAuthors90d:  36,
+		HasContributing: true,
+		Enriched:        true,
 	}
 	return lic(r, "Apache-2.0")
 }
@@ -246,7 +304,8 @@ func TestContributabilityArchivedScoresZero(t *testing.T) {
 // documentation.
 func TestContributabilityPunishesNoMergedWork(t *testing.T) {
 	dead := healthy()
-	dead.MergedPRs30d, dead.MergedPRs90d, dead.PRAuthors90d = 0, 0, 0
+	dead.MergedPRs30d, dead.MergedPRs90d = 0, 0
+	dead.HumanPRs90d, dead.ForkPRs90d, dead.ForkAuthors90d = 0, 0, 0
 
 	s := Contributability(dead, now)
 	if s.Total >= Contributability(healthy(), now).Total*0.5 {
@@ -275,16 +334,97 @@ func TestContributabilityUnenrichedUsesSlicesOnly(t *testing.T) {
 	}
 }
 
-// Many different people getting work merged is the signal that matters most.
+// Many different outsiders getting work merged is the signal that matters most.
 func TestContributabilityRewardsAuthorDiversity(t *testing.T) {
-	oneMaintainer := healthy()
-	oneMaintainer.PRAuthors90d = 1
+	one := healthy()
+	one.ForkAuthors90d = 1
 
 	many := healthy()
-	many.PRAuthors90d = 25
+	many.ForkAuthors90d = 25
 
-	if Contributability(many, now).Total <= Contributability(oneMaintainer, now).Total {
-		t.Error("a project merging work from many people should rank higher")
+	if Contributability(many, now).Total <= Contributability(one, now).Total {
+		t.Error("a project merging work from many outsiders should rank higher")
+	}
+}
+
+// A busy project whose every merge is a maintainer's in-repo branch has shown
+// nothing about whether an outsider's work would land. Its invitations,
+// throughput and contributor count must not add up to an open score.
+func TestContributabilityInRepoMergesOnlyScoresLow(t *testing.T) {
+	closed := healthy()
+	closed.Slices = []string{github.SliceGoodFirst, github.SliceHelpWanted}
+	closed.ForkPRs90d, closed.ForkAuthors90d = 0, 0
+
+	s := Contributability(closed, now)
+	if s.Total > 0.35 {
+		t.Errorf("a repo merging only its own branches scored %.3f, want it low", s.Total)
+	}
+	if !hasNote(s, "0/48 human PRs merged in 90d came from forks") {
+		t.Errorf("the discount should be explained; notes = %v", s.Notes)
+	}
+	// The evidence is shown even though it contributed nothing.
+	c, ok := component(s, "outside authors")
+	if !ok || !c.Headline {
+		t.Fatalf("components = %+v, want the fork evidence as the headline", s.Components)
+	}
+	if c.Detail != "0/48 human PRs merged from forks, 0 outside authors" {
+		t.Errorf("detail = %q", c.Detail)
+	}
+}
+
+// The discount ramps with the share of merges coming from forks rather than
+// switching at a threshold, so one extra outside merge never moves a repository
+// from closed to open.
+func TestContributabilityForkShareRamps(t *testing.T) {
+	at := func(forks int) float64 {
+		r := healthy()
+		r.ForkPRs90d = forks
+		r.ForkAuthors90d = 5
+		return Contributability(r, now).Total
+	}
+	none, few, quarter, most := at(0), at(6), at(12), at(40)
+	if !(none < few && few < quarter) {
+		t.Errorf("scores %.3f, %.3f, %.3f should rise with the fork share", none, few, quarter)
+	}
+	// From a quarter of human merges upward, the share no longer discounts.
+	if quarter != most {
+		t.Errorf("12/48 scored %.3f and 40/48 %.3f, want no discount at or past a quarter", quarter, most)
+	}
+}
+
+// Merges from nobody but bots are no more evidence of openness than merges from
+// nobody.
+func TestContributabilityBotOnlyMergesAreNotOpenness(t *testing.T) {
+	r := healthy()
+	r.HumanPRs90d, r.ForkPRs90d, r.ForkAuthors90d = 0, 0, 0
+
+	s := Contributability(r, now)
+	if s.Total > 0.35 {
+		t.Errorf("a repo merging only bot PRs scored %.3f, want it low", s.Total)
+	}
+	if !hasNote(s, "no human-authored PRs merged in 90d") {
+		t.Errorf("notes = %v", s.Notes)
+	}
+}
+
+// The regression case the fork distinction exists for. Orca's labels,
+// throughput and contributor count once outscored a project that merges
+// outsiders' work every day; who actually gets merged must decide it.
+func TestContributabilityRanksHeadroomAboveOrca(t *testing.T) {
+	o := Contributability(orca(), measuredOn)
+	h := Contributability(headroom(), measuredOn)
+
+	if o.Total >= h.Total {
+		t.Errorf("orca %.3f should score below headroom %.3f", o.Total, h.Total)
+	}
+	if o.Total >= 0.5 {
+		t.Errorf("orca scored %.3f, want it below 0.5 with 5/75 merges from forks", o.Total)
+	}
+	if !hasNote(o, "only 5/75 human PRs merged in 90d came from forks") {
+		t.Errorf("orca's discount should be explained; notes = %v", o.Notes)
+	}
+	if len(h.Notes) != 0 {
+		t.Errorf("headroom should carry no caveats; notes = %v", h.Notes)
 	}
 }
 
@@ -442,12 +582,17 @@ func hasNote(s Score, substr string) bool {
 }
 
 func hasComponent(s Score, name string) bool {
+	_, ok := component(s, name)
+	return ok
+}
+
+func component(s Score, name string) (Component, bool) {
 	for _, c := range s.Components {
 		if c.Name == name {
-			return true
+			return c, true
 		}
 	}
-	return false
+	return Component{}, false
 }
 
 func names(cs []Candidate) string {

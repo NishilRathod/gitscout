@@ -64,10 +64,45 @@ flags the star pattern as inorganic.
 
 ### The strongest available signal is who gets merged
 
-A `CONTRIBUTING.md` is cheap to write. Twenty-one different people's patches
-landing in ninety days cannot be faked, so **distinct pull-request authors**
-carries more weight than any stated intention. Bot accounts are excluded — a
+A `CONTRIBUTING.md` is cheap to write. Thirty-six different outsiders' patches
+landing in ninety days cannot be faked, so **merges from forks** carry more
+weight than any stated intention.
+
+Only a pull request opened from a fork counts as outside work. Pushing a branch
+to the repository itself needs write access, so in-repo branches are the
+maintainers' own work however many maintainers there are. An earlier version
+counted every distinct pull-request author, and rated projects that almost never
+merge outside work as the most welcoming on the list. Measured on 2026-10-07,
+over the previous ninety days:
+
+| | `stablyai/orca` | `headroomlabs-ai/headroom` |
+|---|---|---|
+| People with PRs merged | 5 | 37 |
+| Human PRs merged from forks | **5 of 75** | 72 of 87 |
+| Outside authors | **1** | 36 |
+| OPEN, counting every author | 0.93 | 0.75 |
+| OPEN, counting fork merges | **0.38** | 0.75 |
+
+Two measurements drive the score:
+
+- **Outside authors** — distinct people whose pull requests from a fork were
+  merged in ninety days. The largest single component; fifteen earns full marks.
+- **Fork share** — the fraction of human-authored merges that came from forks.
+  Below a quarter, the whole score is scaled down in proportion, to 0.3 of
+  itself at zero, because good-first-issue labels, throughput and a large
+  contributor count say nothing about whether an outsider's work would land.
+  Projects that genuinely take outside work measured 70–98%; ones that only
+  looked busy, 2–11%.
+
+Every row leads its evidence with both, whatever they scored —
+`5/75 human PRs merged from forks, 1 outside author` — and a discounted row says
+by how much in its caveats. Bot accounts are excluded from both counts — a
 repository whose merged PRs are mostly dependency bumps is not thereby welcoming.
+
+The fork test is GraphQL's `isCrossRepository` (head repository differs from the
+base), read from the REST pull-request listing enrichment already fetches, so it
+costs no extra request. It errs in one direction: maintainers who work from
+personal forks count as outsiders.
 
 ### Every score shows its arithmetic
 
@@ -86,8 +121,8 @@ tool can show that a project with 97,000 stars has not been pushed to since July
 
 ```
 CONTRIBUTE NOW
-  REPOSITORY                LANG        STARS  OPEN  MERGE  FIT   WHY
-  CherryHQ/cherry-studio    TypeScript  51.4k  0.85  1.00   0.68  1825.0 stars/day measured over 14d; +115.4 stars/day faster…
+  REPOSITORY                LANG    STARS  OPEN  MERGE  FIT   WHY
+  headroomlabs-ai/headroom  Python  74.5k  0.75  0.51*  0.67  72/87 human PRs merged from forks, 36 outside autho…
 ```
 
 - **OPEN** — how readily outside work actually gets merged
@@ -125,8 +160,8 @@ responses already carry stars, forks, language, topics, licence and timestamps,
 so a candidate costs nothing beyond its slice until enrichment.
 
 **Enrich** spends three core-budget requests each on the most promising ~60:
-contributor count, recent merged-PR throughput and author diversity, and whether
-contribution guidance exists. It uses no search requests at all — the search
+contributor count, recent merged-PR throughput and how much of it came from
+forks, and whether contribution guidance exists. It uses no search requests at all — the search
 limit is 30/minute, the core limit 5000/hour, so the expensive-looking work goes
 where the budget is.
 
@@ -165,9 +200,10 @@ go test ./...
 ```
 
 Every test runs offline against `httptest` servers and fixtures. The fixtures
-are real: `ultraworkers/claw-code`, `nvbn/thefuck` and `FiloSottile/mkcert` are
-recorded from live API responses and asserted as named regression cases, so the
-star-farm filter and the abandoned-project detector cannot silently stop working.
+are real: `ultraworkers/claw-code`, `nvbn/thefuck`, `FiloSottile/mkcert`,
+`stablyai/orca` and `headroomlabs-ai/headroom` are recorded from live API
+responses and asserted as named regression cases, so the star-farm filter, the
+abandoned-project detector and the fork-merge test cannot silently stop working.
 
 ## Licence
 

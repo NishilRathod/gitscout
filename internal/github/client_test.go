@@ -301,10 +301,93 @@ func TestMergedPRStatsWindowsAndBots(t *testing.T) {
 	if st.Merged90d != 5 {
 		t.Errorf("Merged90d = %d, want 5", st.Merged90d)
 	}
-	// Distinct humans only: alice, bob, carol. The renovate account has type
-	// "User" and is caught by the login suffix alone.
-	if st.DistinctAuthors90d != 3 {
-		t.Errorf("DistinctAuthors90d = %d, want 3", st.DistinctAuthors90d)
+	// Humans only: alice, bob, carol. The renovate account has type "User"
+	// and is caught by the login suffix alone.
+	if st.HumanMerged90d != 3 {
+		t.Errorf("HumanMerged90d = %d, want 3", st.HumanMerged90d)
+	}
+}
+
+// prJSON builds one closed pull request as the pulls listing returns it. A head
+// repository id of 0 stands for a head repository that has since been deleted,
+// which the API reports as null.
+func prJSON(merged, login, typ string, headRepo, baseRepo int64) string {
+	head := "null"
+	if headRepo != 0 {
+		head = fmt.Sprintf(`{"id":%d}`, headRepo)
+	}
+	return fmt.Sprintf(`{"merged_at":%s,"user":{"login":%q,"type":%q},"head":{"repo":%s},"base":{"repo":{"id":%d}}}`,
+		merged, login, typ, head, baseRepo)
+}
+
+// Only pull requests opened from a fork are evidence that outside work gets
+// merged. Branches pushed to the repository itself need write access, which
+// outsiders do not have.
+func TestMergedPRStatsSeparatesForksFromInRepoBranches(t *testing.T) {
+	const base, fork1, fork2 = 1, 2, 3
+	now := time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC)
+	body := "[" + strings.Join([]string{
+		prJSON(`"2026-10-01T00:00:00Z"`, "maintainer", "User", base, base),
+		prJSON(`"2026-09-20T00:00:00Z"`, "maintainer", "User", base, base),
+		prJSON(`"2026-09-15T00:00:00Z"`, "member", "User", base, base),
+		prJSON(`"2026-09-10T00:00:00Z"`, "outsider", "User", fork1, base),
+		prJSON(`"2026-09-05T00:00:00Z"`, "outsider", "User", fork1, base),
+		// A fork deleted after its PR merged is still a fork.
+		prJSON(`"2026-08-30T00:00:00Z"`, "drive-by", "User", 0, base),
+		// Bots are excluded from both the fork count and the total.
+		prJSON(`"2026-09-01T00:00:00Z"`, "dependabot[bot]", "Bot", base, base),
+		prJSON(`"2026-09-02T00:00:00Z"`, "forkbot[bot]", "User", fork2, base),
+		// Outside the window, and never merged.
+		prJSON(`"2026-01-01T00:00:00Z"`, "old-timer", "User", fork2, base),
+		prJSON(`null`, "rejected", "User", fork2, base),
+	}, ",") + "]"
+	c, _ := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, body)
+	}))
+
+	st, err := c.MergedPRStats(context.Background(), "a/b", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Merged90d != 8 {
+		t.Errorf("Merged90d = %d, want 8", st.Merged90d)
+	}
+	if st.HumanMerged90d != 6 {
+		t.Errorf("HumanMerged90d = %d, want 6", st.HumanMerged90d)
+	}
+	if st.ForkMerged90d != 3 {
+		t.Errorf("ForkMerged90d = %d, want 3 (two from outsider, one from a deleted fork)", st.ForkMerged90d)
+	}
+	if st.ForkAuthors90d != 2 {
+		t.Errorf("ForkAuthors90d = %d, want 2 (outsider, drive-by)", st.ForkAuthors90d)
+	}
+}
+
+// The case that prompted the fork distinction: a busy repository whose every
+// merge is a maintainer's in-repo branch. Many merges, several authors, and no
+// evidence at all that an outsider's work would land.
+func TestMergedPRStatsAllInRepoBranchesHaveNoOutsideAuthors(t *testing.T) {
+	const base = 7
+	now := time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC)
+	var prs []string
+	for i, login := range []string{"ana", "ben", "cai", "dee", "eli", "ana", "ben", "cai"} {
+		merged := fmt.Sprintf(`"2026-09-%02dT00:00:00Z"`, i+1)
+		prs = append(prs, prJSON(merged, login, "User", base, base))
+	}
+	body := "[" + strings.Join(prs, ",") + "]"
+	c, _ := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, body)
+	}))
+
+	st, err := c.MergedPRStats(context.Background(), "a/b", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.HumanMerged90d != 8 {
+		t.Errorf("HumanMerged90d = %d, want 8", st.HumanMerged90d)
+	}
+	if st.ForkMerged90d != 0 || st.ForkAuthors90d != 0 {
+		t.Errorf("fork merges = %d from %d authors, want none", st.ForkMerged90d, st.ForkAuthors90d)
 	}
 }
 
