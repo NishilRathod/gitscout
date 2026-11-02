@@ -292,6 +292,7 @@ func applyEnrichment(repos []github.Repo, enriched []github.Repo) {
 		repos[i].HumanPRs90d = e.HumanPRs90d
 		repos[i].ForkPRs90d = e.ForkPRs90d
 		repos[i].ForkAuthors90d = e.ForkAuthors90d
+		repos[i].ForkUnmerged90d = e.ForkUnmerged90d
 		repos[i].HasContributing = e.HasContributing
 		repos[i].Enriched = e.Enriched
 	}

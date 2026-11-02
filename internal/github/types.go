@@ -36,6 +36,7 @@ type Repo struct {
 	HumanPRs90d     int  `json:"-"` // merged in 90d, bots excluded
 	ForkPRs90d      int  `json:"-"` // of HumanPRs90d, opened from a fork
 	ForkAuthors90d  int  `json:"-"` // distinct people behind ForkPRs90d
+	ForkUnmerged90d int  `json:"-"` // human PRs from forks closed in 90d without merging
 	HasContributing bool `json:"-"`
 	Enriched        bool `json:"-"`
 

@@ -1,6 +1,7 @@
 package score
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -133,6 +134,61 @@ func headroom() github.Repo {
 		HumanPRs90d:     87,
 		ForkPRs90d:      72,
 		ForkAuthors90d:  36,
+		HasContributing: true,
+		Enriched:        true,
+	}
+	return lic(r, "Apache-2.0")
+}
+
+// closedOn is when openGym and deepTutor were recorded from the live API.
+var closedOn = time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
+
+// openGym reproduces DuarteSantos8/openGym as measured on 2026-11-02. The
+// 2026-10-12 digest scored it 0.74 on 74 of 75 human PRs merged from forks,
+// but its maintainer now closes outside PRs and re-implements the fixes: of
+// the 99 fork PRs closed on the page enrichment reads, 86 were never merged.
+// 13 of its 14 human merges still came from forks, so the fork share alone
+// cannot see it.
+func openGym() github.Repo {
+	r := github.Repo{
+		ID:              1305213943,
+		FullName:        "DuarteSantos8/openGym",
+		Language:        "JavaScript",
+		Stars:           18696,
+		Forks:           2466,
+		CreatedAt:       time.Date(2026, 7, 18, 0, 0, 0, 0, time.UTC),
+		PushedAt:        time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
+		Contributors:    105,
+		MergedPRs30d:    14,
+		MergedPRs90d:    14,
+		HumanPRs90d:     14,
+		ForkPRs90d:      13,
+		ForkAuthors90d:  10,
+		ForkUnmerged90d: 86,
+		HasContributing: true,
+		Enriched:        true,
+	}
+	return lic(r, "AGPL-3.0")
+}
+
+// deepTutor reproduces HKUDS/DeepTutor as measured on 2026-11-02: 85 of the 97
+// fork PRs it closed in 90 days were merged, from 45 different people.
+func deepTutor() github.Repo {
+	r := github.Repo{
+		ID:              1124219907,
+		FullName:        "HKUDS/DeepTutor",
+		Language:        "Python",
+		Stars:           53871,
+		Forks:           6589,
+		CreatedAt:       time.Date(2025, 12, 28, 0, 0, 0, 0, time.UTC),
+		PushedAt:        time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC),
+		Contributors:    268,
+		MergedPRs30d:    87,
+		MergedPRs90d:    88,
+		HumanPRs90d:     88,
+		ForkPRs90d:      85,
+		ForkAuthors90d:  45,
+		ForkUnmerged90d: 12,
 		HasContributing: true,
 		Enriched:        true,
 	}
@@ -425,6 +481,152 @@ func TestContributabilityRanksHeadroomAboveOrca(t *testing.T) {
 	}
 	if len(h.Notes) != 0 {
 		t.Errorf("headroom should carry no caveats; notes = %v", h.Notes)
+	}
+}
+
+// The regression case the acceptance rate exists for. openGym's merges still
+// come almost entirely from forks, but it closes most outside PRs unmerged;
+// counting merges alone kept it rated as open.
+func TestContributabilityPenalisesClosingOutsidePRs(t *testing.T) {
+	g := Contributability(openGym(), closedOn)
+	d := Contributability(deepTutor(), closedOn)
+
+	mergesOnly := openGym()
+	mergesOnly.ForkUnmerged90d = 0
+	if m := Contributability(mergesOnly, closedOn).Total; m < 0.6 {
+		t.Fatalf("on merges alone openGym scored %.3f; the fixture no longer shows the problem", m)
+	}
+	if g.Total >= 0.4 {
+		t.Errorf("openGym scored %.3f, want it below 0.4 with 13/99 closed fork PRs merged", g.Total)
+	}
+	if g.Total >= d.Total {
+		t.Errorf("openGym %.3f should score below DeepTutor %.3f", g.Total, d.Total)
+	}
+	if !hasNote(g, "only 13/99 closed fork PRs merged in 90d — outside PRs are mostly closed unmerged, so the score is scaled by 0.44") {
+		t.Errorf("the discount should be explained; notes = %v", g.Notes)
+	}
+	c, _ := component(g, "outside authors")
+	if c.Detail != "13/14 human PRs merged from forks, 10 outside authors, 13/99 closed fork PRs merged" {
+		t.Errorf("detail = %q", c.Detail)
+	}
+}
+
+// A project that merges most of what outsiders send is untouched, however
+// many PRs it also closes.
+func TestContributabilityAcceptanceLeavesHealthyProjectsAlone(t *testing.T) {
+	busy := healthy()
+	busy.ForkUnmerged90d = 20 // 36/56 merged
+
+	for _, tt := range []struct {
+		r  github.Repo
+		on time.Time
+	}{{deepTutor(), closedOn}, {busy, now}} {
+		got := Contributability(tt.r, tt.on)
+		mergesOnly := tt.r
+		mergesOnly.ForkUnmerged90d = 0
+		if want := Contributability(mergesOnly, tt.on).Total; got.Total != want {
+			t.Errorf("%s scored %.3f, want %.3f as if nothing were closed", tt.r.FullName, got.Total, want)
+		}
+		if len(got.Notes) != 0 {
+			t.Errorf("%s should carry no caveats; notes = %v", tt.r.FullName, got.Notes)
+		}
+	}
+	d := Contributability(deepTutor(), closedOn)
+	c, _ := component(d, "outside authors")
+	if !strings.HasSuffix(c.Detail, ", 85/97 closed fork PRs merged") {
+		t.Errorf("detail = %q, want the acceptance rate shown even when it costs nothing", c.Detail)
+	}
+}
+
+// Below the reference the score is scaled in proportion to the rate, down to
+// the floor. The closed counts here exceed what one page could show; they
+// vary the rate while every other input stays fixed.
+func TestContributabilityAcceptanceScalesInProportion(t *testing.T) {
+	at := func(unmerged int) float64 {
+		r := healthy() // 36 fork PRs merged
+		r.ForkUnmerged90d = unmerged
+		return Contributability(r, now).Total
+	}
+	open := at(0)
+	if got := at(84); got != open {
+		t.Errorf("36/120 merged scored %.3f, want %.3f: no discount at 30%%", got, open)
+	}
+	if got, want := at(204), open*0.5; math.Abs(got-want) > 1e-9 {
+		t.Errorf("36/240 merged scored %.3f, want %.3f: half the reference rate, half the score", got, want)
+	}
+	// Near zero: many merges, almost none of what outsiders send.
+	near := at(1164)
+	if want := open * closedFloor; math.Abs(near-want) > 1e-9 {
+		t.Errorf("36/1200 merged scored %.3f, want the floor %.3f", near, want)
+	}
+	if near > 0.35 {
+		t.Errorf("a repo merging 3%% of closed outside PRs scored %.3f, want it low", near)
+	}
+}
+
+// A handful of closed PRs is too few to call a project closed: one withdrawn
+// draft would swing the rate.
+func TestContributabilityAcceptanceNeedsASample(t *testing.T) {
+	small := func(merged, unmerged int) github.Repo {
+		r := healthy()
+		r.HumanPRs90d, r.ForkPRs90d, r.ForkAuthors90d, r.ForkUnmerged90d = 3, merged, merged, unmerged
+		return r
+	}
+	nine := Contributability(small(2, 7), now)
+	if hasNote(nine, "closed fork PRs merged") {
+		t.Errorf("2/9 should be too few to judge; notes = %v", nine.Notes)
+	}
+	if want := Contributability(small(2, 0), now).Total; nine.Total != want {
+		t.Errorf("2/9 scored %.3f, want %.3f", nine.Total, want)
+	}
+	ten := Contributability(small(2, 8), now)
+	if !hasNote(ten, "only 2/10 closed fork PRs merged in 90d") {
+		t.Errorf("2/10 should be judged; notes = %v", ten.Notes)
+	}
+}
+
+// The fork share and the acceptance rate both count the same outside merges,
+// so a project failing both takes the stronger discount, not their product.
+// Otherwise a project merging nothing from outside would fall below the floor
+// for one fact seen twice.
+func TestContributabilityAppliesOnlyTheStrongerDiscount(t *testing.T) {
+	scaled := func(s Score) int {
+		n := 0
+		for _, note := range s.Notes {
+			if strings.Contains(note, "scaled by") {
+				n++
+			}
+		}
+		return n
+	}
+
+	// stablyai/orca's live page on 2026-11-02: no merges from forks, and
+	// 27 fork PRs closed unmerged.
+	closed := healthy()
+	closed.ForkPRs90d, closed.ForkAuthors90d = 0, 0
+	floor := Contributability(closed, now)
+	closed.ForkUnmerged90d = 27
+	both := Contributability(closed, now)
+	if both.Total != floor.Total {
+		t.Errorf("scored %.3f, want %.3f: the floor is already the strongest discount", both.Total, floor.Total)
+	}
+	if !hasNote(both, "only 0/27 closed fork PRs merged in 90d") || scaled(both) != 1 {
+		t.Errorf("want both pieces of evidence and one scaling; notes = %v", both.Notes)
+	}
+
+	// 5/48 merges from forks scales by 0.59; 5/33 closed fork PRs merged by 0.51.
+	r := healthy()
+	r.ForkPRs90d = 5
+	shareOnly := Contributability(r, now)
+	r.ForkUnmerged90d = 28
+	s := Contributability(r, now)
+	if s.Total >= shareOnly.Total || s.Total <= shareOnly.Total*0.51 {
+		t.Errorf("scored %.3f, want the 0.51 discount in place of 0.59 (%.3f), not on top of it",
+			s.Total, shareOnly.Total*0.51/0.59)
+	}
+	if !hasNote(s, "only 5/33 closed fork PRs merged in 90d — outside PRs are mostly closed unmerged, so the score is scaled by 0.51") ||
+		scaled(s) != 1 {
+		t.Errorf("only the applied discount should say so; notes = %v", s.Notes)
 	}
 }
 

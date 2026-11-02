@@ -312,12 +312,21 @@ func TestMergedPRStatsWindowsAndBots(t *testing.T) {
 // repository id of 0 stands for a head repository that has since been deleted,
 // which the API reports as null.
 func prJSON(merged, login, typ string, headRepo, baseRepo int64) string {
-	head := "null"
-	if headRepo != 0 {
-		head = fmt.Sprintf(`{"id":%d}`, headRepo)
-	}
 	return fmt.Sprintf(`{"merged_at":%s,"user":{"login":%q,"type":%q},"head":{"repo":%s},"base":{"repo":{"id":%d}}}`,
-		merged, login, typ, head, baseRepo)
+		merged, login, typ, repoJSON(headRepo), baseRepo)
+}
+
+// closedJSON builds one pull request that was closed without being merged.
+func closedJSON(closed, login, typ string, headRepo, baseRepo int64) string {
+	return fmt.Sprintf(`{"merged_at":null,"closed_at":%q,"user":{"login":%q,"type":%q},"head":{"repo":%s},"base":{"repo":{"id":%d}}}`,
+		closed, login, typ, repoJSON(headRepo), baseRepo)
+}
+
+func repoJSON(id int64) string {
+	if id == 0 {
+		return "null"
+	}
+	return fmt.Sprintf(`{"id":%d}`, id)
 }
 
 // Only pull requests opened from a fork are evidence that outside work gets
@@ -388,6 +397,46 @@ func TestMergedPRStatsAllInRepoBranchesHaveNoOutsideAuthors(t *testing.T) {
 	}
 	if st.ForkMerged90d != 0 || st.ForkAuthors90d != 0 {
 		t.Errorf("fork merges = %d from %d authors, want none", st.ForkMerged90d, st.ForkAuthors90d)
+	}
+}
+
+// Merges alone cannot see a maintainer who closes outside work and rewrites it
+// in-house, so fork PRs closed without merging are counted from the same page.
+// Only an outsider's PR closed inside the window says anything: a maintainer
+// abandoning an in-repo branch is housekeeping.
+func TestMergedPRStatsCountsForkPRsClosedUnmerged(t *testing.T) {
+	const base, fork = 1, 2
+	now := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
+	body := "[" + strings.Join([]string{
+		prJSON(`"2026-10-30T00:00:00Z"`, "outsider", "User", fork, base),
+		closedJSON("2026-10-29T00:00:00Z", "outsider", "User", fork, base),
+		closedJSON("2026-10-28T00:00:00Z", "drive-by", "User", fork, base),
+		// A fork deleted after its PR was closed is still a fork.
+		closedJSON("2026-10-27T00:00:00Z", "gone", "User", 0, base),
+		// None of these count: an abandoned in-repo branch, a bot's fork,
+		// and a PR closed before the window.
+		closedJSON("2026-10-26T00:00:00Z", "maintainer", "User", base, base),
+		closedJSON("2026-10-25T00:00:00Z", "forkbot[bot]", "User", fork, base),
+		closedJSON("2026-07-01T00:00:00Z", "old-timer", "User", fork, base),
+	}, ",") + "]"
+	c, _ := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, body)
+	}))
+
+	st, err := c.MergedPRStats(context.Background(), "a/b", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.ForkUnmerged90d != 3 {
+		t.Errorf("ForkUnmerged90d = %d, want 3 (outsider, drive-by, deleted fork)", st.ForkUnmerged90d)
+	}
+	// Closing a pull request is not merging it, and an author whose PRs were
+	// all closed is not an outside author.
+	if st.Merged90d != 1 || st.HumanMerged90d != 1 || st.ForkMerged90d != 1 {
+		t.Errorf("merged = %d, human %d, fork %d; want 1 each", st.Merged90d, st.HumanMerged90d, st.ForkMerged90d)
+	}
+	if st.ForkAuthors90d != 1 {
+		t.Errorf("ForkAuthors90d = %d, want 1", st.ForkAuthors90d)
 	}
 }
 

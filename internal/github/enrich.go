@@ -66,6 +66,7 @@ func (c *Client) enrichOne(ctx context.Context, r *Repo) error {
 	r.HumanPRs90d = stats.HumanMerged90d
 	r.ForkPRs90d = stats.ForkMerged90d
 	r.ForkAuthors90d = stats.ForkAuthors90d
+	r.ForkUnmerged90d = stats.ForkUnmerged90d
 
 	has, err := c.HasContributingGuide(ctx, r.FullName)
 	note(err)
@@ -108,11 +109,16 @@ type PRStats struct {
 	HumanMerged90d int
 	ForkMerged90d  int // opened from a fork rather than a branch of the repo
 	ForkAuthors90d int // distinct people behind ForkMerged90d
+
+	// ForkUnmerged90d counts PRs from forks closed without being merged.
+	// With ForkMerged90d it says what becomes of outside work once a
+	// maintainer has looked at it.
+	ForkUnmerged90d int
 }
 
-// MergedPRStats counts recently merged pull requests, and how many of them came
-// from forks and from how many people, from a single page of recently updated
-// closed PRs.
+// MergedPRStats counts recently merged pull requests, how many of them came
+// from forks and from how many people, and how many PRs from forks were closed
+// without merging, all from a single page of recently updated closed PRs.
 //
 // A pull request from a fork is the honest proxy for outside work. Pushing a
 // branch to the repository itself needs write access, which an outsider does
@@ -131,6 +137,16 @@ type PRStats struct {
 // outside authors; that errs towards calling a project open, the opposite of
 // the mistake this replaces.
 //
+// Merges alone cannot see a maintainer who closes outside work, so the same
+// page's unmerged PRs from forks are counted too. DuarteSantos8/openGym merged
+// 74 of 75 human PRs from forks in the 90 days to 2026-10-12; by 2026-11-02 its
+// maintainer was closing outside PRs and re-implementing the fixes, and 86 of
+// the 99 fork PRs on this page had been closed unmerged. A merged PR is dated
+// by merged_at and an unmerged one by closed_at, so both cover the same window.
+// Closing is not always rejection: authors withdraw drafts and duplicates, and
+// some projects land outside work by hand. The scorer acts only on a low rate
+// over a reasonable sample for that reason.
+//
 // The single-page cap means a very busy repository can undercount. That biases
 // the score down for exactly the repos that need no help finding contributors,
 // so it is a safe direction to be wrong in.
@@ -140,6 +156,7 @@ func (c *Client) MergedPRStats(ctx context.Context, fullName string, now time.Ti
 	}
 	var prs []struct {
 		MergedAt *time.Time `json:"merged_at"`
+		ClosedAt *time.Time `json:"closed_at"`
 		User     struct {
 			Login string `json:"login"`
 			Type  string `json:"type"`
@@ -168,7 +185,20 @@ func (c *Client) MergedPRStats(ctx context.Context, fullName string, now time.Ti
 	cut90 := now.AddDate(0, 0, -90)
 
 	for _, pr := range prs {
+		// Bots are excluded: a repo whose merged PRs are mostly dependency
+		// bumps from a bot is not thereby welcoming to human contributors,
+		// and counting them either way would skew the fork share.
+		human := pr.User.Login != "" && !isBot(pr.User.Login, pr.User.Type)
+		fromFork := pr.Head.Repo == nil ||
+			(pr.Base.Repo != nil && pr.Head.Repo.ID != pr.Base.Repo.ID)
+
 		if pr.MergedAt == nil {
+			// Only an outsider's PR closed unmerged says anything about
+			// outside work; a maintainer closing their own in-repo
+			// branch is housekeeping.
+			if human && fromFork && pr.ClosedAt != nil && pr.ClosedAt.After(cut90) {
+				st.ForkUnmerged90d++
+			}
 			continue
 		}
 		if pr.MergedAt.After(cut30) {
@@ -179,16 +209,11 @@ func (c *Client) MergedPRStats(ctx context.Context, fullName string, now time.Ti
 		}
 		st.Merged90d++
 
-		// Bots are excluded: a repo whose merged PRs are mostly dependency
-		// bumps from a bot is not thereby welcoming to human contributors,
-		// and counting them either way would skew the fork share.
-		if pr.User.Login == "" || isBot(pr.User.Login, pr.User.Type) {
+		if !human {
 			continue
 		}
 		st.HumanMerged90d++
 
-		fromFork := pr.Head.Repo == nil ||
-			(pr.Base.Repo != nil && pr.Head.Repo.ID != pr.Base.Repo.ID)
 		if fromFork {
 			st.ForkMerged90d++
 			forkAuthors[pr.User.Login] = true

@@ -2,6 +2,7 @@ package score
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/NishilRathod/gitscout/internal/github"
@@ -20,6 +21,22 @@ const (
 	// projects that genuinely take outside work merged 70-98% of their PRs
 	// from forks; ones that only looked busy merged 2-11%.
 	forkShareReference = 0.25
+
+	// acceptanceReference is the share of closed pull requests from forks
+	// that must have been merged before a project counts as accepting
+	// outside work. Below it the whole score is scaled in proportion, down
+	// to closedFloor. Measured on 2026-11-02 over the projects in the
+	// previous digest, those that take outside work merged 45-94% of the
+	// fork PRs they closed in 90 days, large ones such as vllm-project/vllm
+	// at the low end because they attract the most drive-by PRs.
+	// DuarteSantos8/openGym, whose maintainer closes outside PRs and
+	// re-implements the fixes, merged 13%.
+	acceptanceReference = 0.3
+
+	// acceptanceMinSample is the fewest closed fork PRs worth judging a
+	// project on. Below it one withdrawn draft or spam PR moves the rate by
+	// more than ten points.
+	acceptanceMinSample = 10
 
 	// closedFloor is the fraction of a score left to a project that merges
 	// nothing from outside: the same discount as merging nothing at all.
@@ -97,6 +114,18 @@ func Contributability(r github.Repo, now time.Time) Score {
 		s.note(fmt.Sprintf("no push in %.0f days — a PR may sit unreviewed", stale))
 	}
 
+	// Each discount below is noted on its own evidence, but only the strongest
+	// is applied. They all count the same outside merges, so multiplying
+	// them would push a project that merges nothing from outside below
+	// closedFloor for one fact seen twice.
+	scale, scaledBy := 1.0, -1
+	discount := func(f float64, note string) {
+		s.note(note)
+		if f < scale {
+			scale, scaledBy = f, len(s.Notes)-1
+		}
+	}
+
 	// Nothing merged from anyone in three months is disqualifying however
 	// welcoming the documentation is. Merging only the maintainers' own
 	// branches is disqualifying for the same reason: invitations, throughput
@@ -104,34 +133,56 @@ func Contributability(r github.Repo, now time.Time) Score {
 	// work would land.
 	switch {
 	case r.MergedPRs90d == 0:
-		s.Total *= closedFloor
-		s.note("no pull requests merged in 90 days")
+		discount(closedFloor, "no pull requests merged in 90 days")
 	case r.HumanPRs90d == 0:
-		s.Total *= closedFloor
-		s.note("no human-authored PRs merged in 90d — only bots")
+		discount(closedFloor, "no human-authored PRs merged in 90d — only bots")
 	default:
 		share := float64(r.ForkPRs90d) / float64(r.HumanPRs90d)
 		if share < forkShareReference {
-			f := closedFloor + (1-closedFloor)*share/forkShareReference
-			s.Total *= f
-			s.note(fmt.Sprintf("only %d/%d human PRs merged in 90d came from forks — most work lands from in-repo branches, so the score is scaled by %.2f",
-				r.ForkPRs90d, r.HumanPRs90d, f))
+			discount(closedFloor+(1-closedFloor)*share/forkShareReference,
+				fmt.Sprintf("only %d/%d human PRs merged in 90d came from forks — most work lands from in-repo branches",
+					r.ForkPRs90d, r.HumanPRs90d))
 		}
+	}
+
+	// Closing outside work is disqualifying too, however much of it still
+	// gets merged: a busy maintainer can merge dozens of fork PRs while
+	// closing hundreds more. The rate is the nearest thing to the odds that
+	// an outside PR lands, so the score is scaled in proportion to it rather
+	// than ramped like the fork share: a project merging a tenth of the
+	// outside PRs it closes is a third as good a bet as one at the reference.
+	if closed := r.ForkPRs90d + r.ForkUnmerged90d; closed >= acceptanceMinSample {
+		rate := float64(r.ForkPRs90d) / float64(closed)
+		if rate < acceptanceReference {
+			discount(math.Max(closedFloor, rate/acceptanceReference),
+				fmt.Sprintf("only %d/%d closed fork PRs merged in 90d — outside PRs are mostly closed unmerged",
+					r.ForkPRs90d, closed))
+		}
+	}
+
+	if scaledBy >= 0 {
+		s.Total *= scale
+		s.Notes[scaledBy] += fmt.Sprintf(", so the score is scaled by %.2f", scale)
 	}
 
 	s.Total = clamp(s.Total)
 	return s
 }
 
-// forkEvidence states who gets merged, in the terms the score uses.
+// forkEvidence states who gets merged, and what becomes of outside work, in
+// the terms the score uses.
 func forkEvidence(r github.Repo) string {
-	if r.HumanPRs90d == 0 {
-		return "no human PRs merged in 90d"
+	e := "no human PRs merged in 90d"
+	if r.HumanPRs90d > 0 {
+		authors := "authors"
+		if r.ForkAuthors90d == 1 {
+			authors = "author"
+		}
+		e = fmt.Sprintf("%d/%d human PRs merged from forks, %d outside %s",
+			r.ForkPRs90d, r.HumanPRs90d, r.ForkAuthors90d, authors)
 	}
-	authors := "authors"
-	if r.ForkAuthors90d == 1 {
-		authors = "author"
+	if closed := r.ForkPRs90d + r.ForkUnmerged90d; closed > 0 {
+		e += fmt.Sprintf(", %d/%d closed fork PRs merged", r.ForkPRs90d, closed)
 	}
-	return fmt.Sprintf("%d/%d human PRs merged from forks, %d outside %s",
-		r.ForkPRs90d, r.HumanPRs90d, r.ForkAuthors90d, authors)
+	return e
 }

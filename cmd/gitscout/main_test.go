@@ -8,6 +8,25 @@ import (
 	"github.com/NishilRathod/gitscout/internal/github"
 )
 
+// A field the enrichment pass fills but this copy forgets reads as zero to the
+// scorers, which silently switches its signal off.
+func TestApplyEnrichmentCopiesPullRequestStats(t *testing.T) {
+	repos := []github.Repo{{ID: 1}, {ID: 2}}
+	applyEnrichment(repos, []github.Repo{{
+		ID: 2, MergedPRs30d: 1, MergedPRs90d: 2, HumanPRs90d: 3,
+		ForkPRs90d: 4, ForkAuthors90d: 5, ForkUnmerged90d: 6, Enriched: true,
+	}})
+
+	got := repos[1]
+	if got.MergedPRs30d != 1 || got.MergedPRs90d != 2 || got.HumanPRs90d != 3 ||
+		got.ForkPRs90d != 4 || got.ForkAuthors90d != 5 || got.ForkUnmerged90d != 6 || !got.Enriched {
+		t.Errorf("copied %+v", got)
+	}
+	if repos[0].Enriched {
+		t.Error("a repository nobody enriched must stay unenriched")
+	}
+}
+
 func TestResolveLogin(t *testing.T) {
 	ok := func(login string) func(context.Context) (github.User, error) {
 		return func(context.Context) (github.User, error) {
